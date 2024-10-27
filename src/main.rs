@@ -1,4 +1,8 @@
-use swap2::{accounts::create_account_from_seed, jto::get_tip_instruction};
+use spl_associated_token_account::instruction::create_associated_token_account;
+use swap2::{
+    accounts::create_account_from_seed, jto::get_tip_instruction,
+    swap::get_raydium_buy_swap_instruction,
+};
 
 use anyhow::Result;
 use dotenv::dotenv;
@@ -8,6 +12,7 @@ use solana_sdk::{
     hash::Hash,
     instruction::Instruction,
     message::{v0::Message, VersionedMessage},
+    pubkey::Pubkey,
     signature::{Keypair, Signature},
     signer::Signer,
     system_instruction,
@@ -17,15 +22,16 @@ use spl_token::{
     instruction::{close_account, initialize_account},
     native_mint,
 };
-use std::env;
+use std::{env, str::FromStr};
 
 use solana_client::nonblocking::rpc_client::RpcClient;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Variables
+    let token_pubkey: Pubkey = Pubkey::from_str("umgcPr2uQHzmCerCu6kSPBiaUdMWZewRRQmQ54Apump")?;
     let amount_sol_in: f64 = 0.1;
-    let compute_unit_limit = 8_000;
+    let compute_unit_limit = 60_000;
     let compute_unit_price: u64 = 1_000_000;
 
     // Load Environment Variables
@@ -75,6 +81,23 @@ async fn main() -> Result<()> {
         &keypair.pubkey(),  // owner_pubkey: sender wallet
     )?;
 
+    // Create the associated token account for SPL token
+    let cata: Instruction = create_associated_token_account(
+        &keypair.pubkey(), // funding_address: payer wallet
+        &keypair.pubkey(), // wallet_address: sender wallet
+        &token_pubkey,     // token_mint_address: (the SPL token's address)
+        &spl_token::id(),  // token_program_id: token program
+    );
+
+    // Raydium Buy Swap Instructi
+    let rs: Instruction = get_raydium_buy_swap_instruction(
+        &keypair.pubkey(), // wallet_pubkey: sender wallet
+        &mint_pubkey,      // mint_pubkey: the account generated from the seed (WSOL account)
+        &token_pubkey,     // token_pubkey: the SPL token's address
+        amount_sol_in,     // amount_sol_in: amount of SOL to spend
+        0,                 // min_amount_out: minimum amount of SPL token to receive
+    )
+    .await?;
     // Close the WSOL account
     let ca: Instruction = close_account(
         &spl_token::id(),     // token_program_id: token program
@@ -90,7 +113,7 @@ async fn main() -> Result<()> {
     // Create the message
     let message: Message = Message::try_compile(
         &keypair.pubkey(),
-        &[cul, cup, caws, ia, ca, gti],
+        &[cul, cup, caws, ia, cata, rs, ca, gti],
         &[],
         recent_blockhash,
     )?;
